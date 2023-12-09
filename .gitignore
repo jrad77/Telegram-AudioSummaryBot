@@ -1,4 +1,8 @@
-audio_files/
+data/
 transcript.txt
 summary.txt
 notes.md
+.venv
+.vscode
+.env
+.DS_Store
