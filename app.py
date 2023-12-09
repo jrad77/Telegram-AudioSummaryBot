@@ -143,8 +143,13 @@ def post_to_telegram(summary, audio=None):
 def main():
     st.title("YouTube Audio Transcriber and Summarizer")
 
-    url = st.text_input("Enter a YouTube URL:")
-    audio_file = st.file_uploader("Or upload an audio file:", type=['mp3', 'wav'])
+    input_type = st.radio("Choose input type", ("YouTube URL", "Upload an audio file"))
+
+    url = audio_file = None
+    if input_type == "YouTube URL":
+        url = st.text_input("Enter a YouTube URL:")
+    else:
+        audio_file = st.file_uploader("Upload an audio file:", type=['mp3', 'wav'])
 
     disable_telegram = st.checkbox("Disable posting to Telegram", value=True)
 
@@ -153,6 +158,7 @@ def main():
             summary = handle_youtube_url(url)
             if not disable_telegram:
                 post_to_telegram(summary)
+            st.markdown(f"**Summary for the YouTube video at {url}:**")
             st.text_area("Summary", summary, height=250)
         elif audio_file:
             # Save the uploaded audio file to a temporary location
@@ -162,10 +168,10 @@ def main():
             summary = handle_audio_file(audio_path)
             if not disable_telegram:
                 post_to_telegram(summary, audio_path)
+            st.markdown(f"**Summary for the uploaded audio file {audio_file.name}:**")
             st.text_area("Summary", summary, height=250)
         else:
             st.warning("Please enter a URL or upload an audio file.")
-
 
 if __name__ == '__main__':
     main()
