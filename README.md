@@ -1,7 +1,24 @@
 # Telegram-AudioSummaryBot
-Simple bot to transcribe audio files, summarize them, then post the audio file and summary to a telegram channel
+Simple streamlit interface to allow you to transcribe audio files or youtube videos using whisper, summarize them using gpt-4, then post the audio file and summary to a telegram channel
 
-# Support for Whisper.cpp
+# Get started
+
+To run the application, follow these steps:
+
+1. Activate the virtual environment:
+
+    ```bash
+    source ./.venv/bin/activate
+    ```
+
+2. Start the Streamlit application:
+
+    ```bash
+    streamlit run ./app.py
+    ```
+
+
+# Future plans - Support for Whisper.cpp
 
 **IMPORTANT LIMITATIONS**: currently runs only with 16-bit WAV files, so make sure to convert your input before running the tool. For example, you can use ffmpeg like this:
 

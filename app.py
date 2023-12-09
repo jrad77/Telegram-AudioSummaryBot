@@ -8,6 +8,9 @@ import argparse
 import requests
 from dotenv import load_dotenv
 
+import streamlit as st
+
+
 load_dotenv()
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
@@ -74,7 +77,7 @@ def get_transcript_from_youtube(url):
     return transcribe_audio(download_audio_from_youtube(url))
 
 def summarize_transcript(transcript):
-    completion = client.chat.completions.create(model="gpt-3.5-turbo",
+    completion = client.chat.completions.create(model="gpt-4-1106-preview",
     messages=[
         {"role": "system", "content": "You are a helpful assistant that "
             "summarizes transcriptions from audio files as though you are the speaker."},
@@ -137,24 +140,32 @@ def post_to_telegram(summary, audio=None):
         print(response.text)
 
 
+def main():
+    st.title("YouTube Audio Transcriber and Summarizer")
+
+    url = st.text_input("Enter a YouTube URL:")
+    audio_file = st.file_uploader("Or upload an audio file:", type=['mp3', 'wav'])
+
+    disable_telegram = st.checkbox("Disable posting to Telegram", value=True)
+
+    if st.button("Process"):
+        if url:
+            summary = handle_youtube_url(url)
+            if not disable_telegram:
+                post_to_telegram(summary)
+            st.text_area("Summary", summary, height=250)
+        elif audio_file:
+            # Save the uploaded audio file to a temporary location
+            audio_path = f"./data/audio_files/{audio_file.name}"
+            with open(audio_path, "wb") as f:
+                f.write(audio_file.getbuffer())
+            summary = handle_audio_file(audio_path)
+            if not disable_telegram:
+                post_to_telegram(summary, audio_path)
+            st.text_area("Summary", summary, height=250)
+        else:
+            st.warning("Please enter a URL or upload an audio file.")
+
+
 if __name__ == '__main__':
-    argumentParser = argparse.ArgumentParser()
-    argumentParser.add_argument("-u", "--url", help="Youtube URL")
-    argumentParser.add_argument("-a", "--audio", help="Audio file")
-    argumentParser.add_argument("-d", "--disable-telegram", help="Disable posting to telegram", action='store_true')
-    args = argumentParser.parse_args()
-
-    args.url = "https://www.youtube.com/watch?v=ZSddchIGNG0"
-
-    if args.url:
-        summary = handle_youtube_url(args.url)
-        if not args.disable_telegram:
-            post_to_telegram(summary)
-    elif args.audio:
-        summary = handle_audio_file(args.audio)
-        if not args.disable_telegram:
-            post_to_telegram(summary, args.audio)
-    else:
-        argumentParser.print_help()
-        sys.exit(1)
-
+    main()
