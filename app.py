@@ -40,10 +40,34 @@ def download_audio_from_youtube(url):
 
 
 def transcribe_audio(audio_file):
+    # Load the transcript cache file
+    try:
+        with open('./data/transcript_cache.json', 'r') as f:
+            transcript_cache = json.load(f)
+    except FileNotFoundError:
+        transcript_cache = {}
+
+    # If the audio file is in the cache and the transcript file exists, skip the transcription
+    transcript_file = f"./data/transcripts/{os.path.basename(audio_file)}.txt"
+    if audio_file in transcript_cache and os.path.exists(transcript_file):
+        print(f'Transcript for audio file {audio_file} is in cache, skipping transcription')
+        with open(transcript_file, 'r') as f:
+            return f.read()
+
     with open(audio_file, 'rb') as file:
         transcript = client.audio.transcriptions.create(model='whisper-1', 
         file=file, response_format="text")
-    print(f"Transcript from the video:\n\n{transcript}\n")
+    print(f"Transcript from the audio:\n\n{transcript}\n")
+
+    # Save the transcript to a file
+    with open(transcript_file, 'w') as f:
+        f.write(transcript)
+
+    # Add the audio file and the transcript file path to the cache and save it
+    transcript_cache[audio_file] = transcript_file
+    with open('./data/transcript_cache.json', 'w') as f:
+        json.dump(transcript_cache, f)
+
     return transcript
 
 def get_transcript_from_youtube(url):
