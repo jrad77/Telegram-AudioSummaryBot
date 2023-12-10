@@ -96,14 +96,15 @@ def handle_transcribed(audio_record):
     pass
 
 def handle_summarized(audio_record):
-    raise NotImplemented("There's nothing to do if it's already summarized")
+    # assume you're getting called to be force resummarized
+    handle_transcribed(audio_record)
 
 def handle_error(audio_record):
     # Logic for handling error status
     # Error recovery or notification
     raise SystemError("There was an error for some reason. Time to debug")
 
-def handle_youtube_url(url):
+def handle_youtube_url(url, force_resummarization=False):
     # Define a map from status to handler function
     status_handlers = {
         'pending': handle_pending,
@@ -129,8 +130,10 @@ def handle_youtube_url(url):
         session.add(audio_data)
         print(f"New URL: {url} inserted, ready for processing.")
 
+    status_before = audio_data.status
     # Loop through successive states until an error occurs or we make it to the `summarized` state
     while audio_data.status != 'error' and audio_data.status != 'summarized':
+        
         # Get the handler based on the status
         handler = status_handlers.get(audio_data.status, lambda x: print(f"Unhandled status: {audio_data.status}"))
         # Call the handler function
@@ -142,7 +145,11 @@ def handle_youtube_url(url):
     session.commit()
 
     session.refresh(audio_data)
-    assert audio_data.status == 'summarized'
+    if force_resummarization and status_before == audio_data.status == 'summarized': 
+        handle_transcribed(audio_data)
+    else: 
+        assert audio_data.status == 'summarized'
+
     audio_data.load_summary()
     return audio_data.summary
 
@@ -196,9 +203,11 @@ def main():
 
     disable_telegram = st.checkbox("Disable posting to Telegram", value=True)
 
+    force_resummarization = st.checkbox("Force resummarization", value=False)
+
     if st.button("Process"):
         if url:
-            summary = handle_youtube_url(url)
+            summary = handle_youtube_url(url, force_resummarization)
             if not disable_telegram:
                 post_to_telegram(summary)
             st.markdown(f"**Summary for the YouTube video at {url}:**")
