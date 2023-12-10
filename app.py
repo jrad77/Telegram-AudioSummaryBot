@@ -14,8 +14,8 @@ import datetime
 
 import streamlit as st
 
-GPT_MODEL='gpt-3.5-turbo'
-#GPT_MODEL='gpt-4-1106-preview'
+#GPT_MODEL='gpt-3.5-turbo'
+GPT_MODEL='gpt-4-1106-preview'
 
 
 load_dotenv()
@@ -40,8 +40,8 @@ def transcribe_audio(audio_file):
 
     return transcript
 
-def summarize_transcript(transcript):
-    completion = client.chat.completions.create(model=GPT_MODEL,
+def summarize_transcript(transcript, model):
+    completion = client.chat.completions.create(model=model,
     messages=[
         {"role": "system", "content": "You are a helpful assistant that "
             "summarizes transcriptions from audio files as though you are the speaker."},
@@ -83,7 +83,9 @@ def handle_transcribed(audio_record):
     # Summarize transcript, update status, etc.
     with open(audio_record.transcript_file_path, 'r') as f: 
         transcript = f.read()
-    summary = summarize_transcript(transcript)
+
+    model=GPT_MODEL
+    summary = summarize_transcript(transcript, model)
 
     # Save the summary to a file
     summary_file = f"./data/summaries/{os.path.basename(audio_record.audio_file_path)}.txt"
@@ -91,6 +93,7 @@ def handle_transcribed(audio_record):
         f.write(summary)
 
     audio_record.transcript_summary_path = summary_file
+    audio_record.summary_model_used = model
     audio_record.status = "summarized"
 
     pass

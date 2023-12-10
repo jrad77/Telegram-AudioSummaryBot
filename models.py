@@ -17,6 +17,7 @@ class YouTubeAudioData(Base):
     transcript_file_path = Column(Text)
     speakers_count = Column(Integer)
     transcript_summary_path = Column(Text)
+    summary_model_used = Column(Text)
     status = Column(String)
     updated_at = Column(DateTime, onupdate=func.now(), default=func.now())
 
