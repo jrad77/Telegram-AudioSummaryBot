@@ -2,3 +2,4 @@ openai
 pytube
 streamlit
 python-dotenv
+SQLAlchemy

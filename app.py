@@ -8,76 +8,40 @@ import argparse
 import requests
 from dotenv import load_dotenv
 
+from database import init_db, Session
+from models import YouTubeAudioData
+import datetime
+
 import streamlit as st
+
+GPT_MODEL='gpt-3.5-turbo'
+#GPT_MODEL='gpt-4-1106-preview'
 
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 
-def download_audio_from_youtube(url):
-    # Load the cache file
-    try:
-        with open('./data/cache.json', 'r') as f:
-            cache = json.load(f)
-    except FileNotFoundError:
-        cache = {}
-
-    # If the URL is in the cache and the file exists, skip the download
-    if url in cache and os.path.exists(cache[url]):
-        print(f'URL {url} is in cache, skipping download')
-        return cache[url]
-
+def download_audio_from_youtube_to_file(url):
     yt = YouTube(url)
     out_file = yt.streams.get_audio_only().download("./data/audio_files/")
     output_mp3 = os.path.splitext(out_file)[0] + '.mp3'
     os.rename(out_file, output_mp3)
     print(f'Audio file downloaded to: {output_mp3}')
 
-    # Add the URL and the file path to the cache and save it
-    cache[url] = output_mp3
-    with open('./data/cache.json', 'w') as f:
-        json.dump(cache, f)
-
     return output_mp3
 
 
 def transcribe_audio(audio_file):
-    # Load the transcript cache file
-    try:
-        with open('./data/transcript_cache.json', 'r') as f:
-            transcript_cache = json.load(f)
-    except FileNotFoundError:
-        transcript_cache = {}
-
-    # If the audio file is in the cache and the transcript file exists, skip the transcription
-    transcript_file = f"./data/transcripts/{os.path.basename(audio_file)}.txt"
-    if audio_file in transcript_cache and os.path.exists(transcript_file):
-        print(f'Transcript for audio file {audio_file} is in cache, skipping transcription')
-        with open(transcript_file, 'r') as f:
-            return f.read()
-
     with open(audio_file, 'rb') as file:
         transcript = client.audio.transcriptions.create(model='whisper-1', 
         file=file, response_format="text")
     print(f"Transcript from the audio:\n\n{transcript}\n")
 
-    # Save the transcript to a file
-    with open(transcript_file, 'w') as f:
-        f.write(transcript)
-
-    # Add the audio file and the transcript file path to the cache and save it
-    transcript_cache[audio_file] = transcript_file
-    with open('./data/transcript_cache.json', 'w') as f:
-        json.dump(transcript_cache, f)
-
     return transcript
 
-def get_transcript_from_youtube(url):
-    return transcribe_audio(download_audio_from_youtube(url))
-
 def summarize_transcript(transcript):
-    completion = client.chat.completions.create(model="gpt-4-1106-preview",
+    completion = client.chat.completions.create(model=GPT_MODEL,
     messages=[
         {"role": "system", "content": "You are a helpful assistant that "
             "summarizes transcriptions from audio files as though you are the speaker."},
@@ -90,24 +54,98 @@ def summarize_transcript(transcript):
     return completion.choices[0].message.content
 
 
-def process_audio_source(get_transcript_func, source):
+# Define your handler functions
+def handle_pending(audio_record):
+    # Logic for handling pending status
+    # Download audio, update status, etc.
 
-    def write_to_file(filename, content):
-        with open(filename, 'w') as f:
-            f.write(content)
+    audio_file = download_audio_from_youtube_to_file(audio_record.url)
+    audio_record.audio_file_path = audio_file
+    audio_record.status = 'downloaded'
 
-    transcript = get_transcript_func(source)
-    write_to_file('./data/transcripts/transcript.txt', transcript)
+def handle_downloaded(audio_record):
+    # Logic for handling downloaded status
+    # Transcribe audio, update status, etc.
+
+    audio_file_path = audio_record.audio_file_path
+    transcript = transcribe_audio(audio_file_path)
+
+    # Save the transcript to a file
+    transcript_file = f"./data/transcripts/{os.path.basename(audio_file_path)}.txt"
+    with open(transcript_file, 'w') as f:
+        f.write(transcript)
+
+    audio_record.transcript_file_path = transcript_file
+    audio_record.status = "transcribed"
+
+def handle_transcribed(audio_record):
+    # Logic for handling transcribed status
+    # Summarize transcript, update status, etc.
+    with open(audio_record.transcript_file_path, 'r') as f: 
+        transcript = f.read()
     summary = summarize_transcript(transcript)
-    print(f"Here is the summary:\n\n{summary}\n")
-    write_to_file('./data/transcripts/summary.txt', summary)
-    return summary
+
+    # Save the summary to a file
+    summary_file = f"./data/summaries/{os.path.basename(audio_record.audio_file_path)}.txt"
+    with open(summary_file, 'w') as f:
+        f.write(summary)
+
+    audio_record.transcript_summary_path = summary_file
+    audio_record.status = "summarized"
+
+    pass
+
+def handle_summarized(audio_record):
+    raise NotImplemented("There's nothing to do if it's already summarized")
+
+def handle_error(audio_record):
+    # Logic for handling error status
+    # Error recovery or notification
+    raise SystemError("There was an error for some reason. Time to debug")
 
 def handle_youtube_url(url):
-    return process_audio_source(get_transcript_from_youtube, url)
+    # Define a map from status to handler function
+    status_handlers = {
+        'pending': handle_pending,
+        'downloaded': handle_downloaded,
+        'transcribed': handle_transcribed,
+        'summarized': handle_summarized,
+        'error': handle_error
+    }
 
-def handle_audio_file(audio_file):
-    return process_audio_source(transcribe_audio, audio_file)
+    session = Session()
+    audio_data = session.query(YouTubeAudioData).filter_by(url=url).first()
+
+    if not audio_data:
+        # Insert a new record with status 'pending'
+        audio_data = YouTubeAudioData(
+            url=url,
+            title="Placeholder Title",
+            description="Placeholder description.",
+            status='pending',
+            index_date=datetime.datetime.now(),
+            updated_at=datetime.datetime.now()
+        )
+        session.add(audio_data)
+        print(f"New URL: {url} inserted, ready for processing.")
+
+    # Loop through successive states until an error occurs or we make it to the `summarized` state
+    while audio_data.status != 'error' and audio_data.status != 'summarized':
+        # Get the handler based on the status
+        handler = status_handlers.get(audio_data.status, lambda x: print(f"Unhandled status: {audio_data.status}"))
+        # Call the handler function
+        handler(audio_data)
+        # Refresh the audio_data object to get the updated status
+        session.commit()
+        session.refresh(audio_data)
+
+    session.commit()
+
+    session.refresh(audio_data)
+    assert audio_data.status == 'summarized'
+    audio_data.load_summary()
+    return audio_data.summary
+
 
 def post_to_telegram(summary, audio=None):
     TELEGRAM_BOT_API_KEY = os.environ.get('TEST_CHANNEL_9000_BOT_API_KEY')
@@ -141,6 +179,11 @@ def post_to_telegram(summary, audio=None):
 
 
 def main():
+
+    # initialize the local database for tracking audio file, transcripts, summaries, etc.
+    # schemas are defined in `models.py`
+    init_db()
+
     st.title("YouTube Audio Transcriber and Summarizer")
 
     input_type = st.radio("Choose input type", ("YouTube URL", "Upload an audio file"))
@@ -165,7 +208,7 @@ def main():
             audio_path = f"./data/audio_files/{audio_file.name}"
             with open(audio_path, "wb") as f:
                 f.write(audio_file.getbuffer())
-            summary = handle_audio_file(audio_path)
+            raise NotImplemented("this is old dead code. Need to reimplement this path")
             if not disable_telegram:
                 post_to_telegram(summary, audio_path)
             st.markdown(f"**Summary for the uploaded audio file {audio_file.name}:**")

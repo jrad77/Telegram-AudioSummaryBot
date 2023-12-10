@@ -1,8 +1,8 @@
 data/
-transcript.txt
-summary.txt
+__pycache__/
 notes.md
 .venv
 .vscode
 .env
+database.db
 .DS_Store
