@@ -187,25 +187,21 @@ def post_to_telegram(summary, audio=None):
     if not response.status_code == 200:
         print(response.text)
 
+### returns a list of all records YouTubeAudioData objects
+def fetch_all_records():
+    session = Session()
+    records = session.query(YouTubeAudioData).all()
+    return records
 
-def main():
+"""
+--------------------------
+Top level functions for handling the different input types
+--------------------------
+"""
 
-    # initialize the local database for tracking audio file, transcripts, summaries, etc.
-    # schemas are defined in `models.py`
-    init_db()
-
-    st.title("YouTube Audio Transcriber and Summarizer")
-
-    input_type = st.radio("Choose input type", ("YouTube URL", "Upload an audio file"))
-
-    url = audio_file = None
-    if input_type == "YouTube URL":
-        url = st.text_input("Enter a YouTube URL:")
-    else:
-        audio_file = st.file_uploader("Upload an audio file:", type=['mp3', 'wav'])
-
+def handle_youtube_option():
+    url = st.text_input("Enter a YouTube URL:")
     disable_telegram = st.checkbox("Disable posting to Telegram", value=True)
-
     force_resummarization = st.checkbox("Force resummarization", value=False)
 
     if st.button("Process"):
@@ -215,18 +211,83 @@ def main():
                 post_to_telegram(summary)
             st.markdown(f"**Summary for the YouTube video at {url}:**")
             st.text_area("Summary", summary, height=250)
-        elif audio_file:
-            # Save the uploaded audio file to a temporary location
-            audio_path = f"./data/audio_files/{audio_file.name}"
-            with open(audio_path, "wb") as f:
-                f.write(audio_file.getbuffer())
-            raise NotImplemented("this is old dead code. Need to reimplement this path")
-            if not disable_telegram:
-                post_to_telegram(summary, audio_path)
-            st.markdown(f"**Summary for the uploaded audio file {audio_file.name}:**")
-            st.text_area("Summary", summary, height=250)
         else:
             st.warning("Please enter a URL or upload an audio file.")
+
+
+def handle_audio_file_option():
+    audio_file = st.file_uploader("Upload an audio file:", type=['mp3', 'wav'])
+    raise NotImplemented("Used to work, but removed during refactoring")
+
+    # Save the uploaded audio file to a temporary location
+    audio_path = f"./data/audio_files/{audio_file.name}"
+    with open(audio_path, "wb") as f:
+        f.write(audio_file.getbuffer())
+    raise NotImplemented("this is old dead code. Need to reimplement this path")
+    if not disable_telegram:
+        post_to_telegram(summary, audio_path)
+    st.markdown(f"**Summary for the uploaded audio file {audio_file.name}:**")
+    st.text_area("Summary", summary, height=250)
+
+
+def handle_previous_transcripts_option():
+    # Fetch all transcripts from the database
+    youtube_audio_data_records = fetch_all_records()  # This function needs to be implemented
+    paths = [y.transcript_summary_path for y in youtube_audio_data_records]
+    transcript_id = st.selectbox("Select a transcript to chat with:", paths)
+
+    if transcript_id:
+        with open(transcript_id, 'r') as f:
+            summary = f.read()
+        st.markdown(f"**Summary for the selected transcript:**")
+        st.text_area("Summary", summary, height=250)
+
+    if summary:
+        st.markdown("You can now chat with the summary above. The model will respond as though it is the speaker.")
+
+        """
+        WIP
+        # Function to upload the file
+        def upload_file(file_path):
+            response = OpenAI.File.create(
+                file=open(file_path, "rb"),
+                purpose='assistants'
+            )
+            return response.id
+
+        # Upload your transcript
+        file_id = upload_file('path_to_your_transcript.txt')
+
+        # Create an assistant
+        assistant = OpenAI.Assistant.create(
+            model="gpt-4-1106-preview",
+            tools=[{"type": "code_interpreter"}],
+            file_ids=[file_id]
+        )
+        """
+
+def main():
+
+    # initialize the local database for tracking audio file, transcripts, summaries, etc.
+    # schemas are defined in `models.py`
+    init_db()
+
+    st.title("YouTube Audio Transcriber, Summarizer, and Chat")
+
+    input_type = st.radio("Choose input type", ("YouTube URL", "Upload an audio file", "Chat with previous transcripts"))
+
+    # First, figure out what mode we're in and call the handler
+    url = audio_file = transcript_id = None
+    if input_type == "YouTube URL":
+        handle_youtube_option()
+    elif input_type == "Upload an audio file":
+        handle_audio_file_option()
+    elif input_type == "Chat with previous transcripts":
+        handle_previous_transcripts_option()
+    else:
+        raise NotImplementedError
+
+    print("done")
 
 if __name__ == '__main__':
     main()
