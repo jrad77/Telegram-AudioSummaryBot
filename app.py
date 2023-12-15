@@ -9,7 +9,7 @@ import requests
 from dotenv import load_dotenv
 
 from database import init_db, Session
-from models import YouTubeAudioData
+from models import YouTubeAudioData, AudioData
 import datetime
 
 import streamlit as st
@@ -216,18 +216,52 @@ def handle_youtube_option():
 
 
 def handle_audio_file_option():
-    audio_file = st.file_uploader("Upload an audio file:", type=['mp3', 'wav'])
-    raise NotImplemented("Used to work, but removed during refactoring")
+    audio_file = st.file_uploader("Upload an audio file:", type=['mp3', 'wav', 'm4a'])
 
-    # Save the uploaded audio file to a temporary location
-    audio_path = f"./data/audio_files/{audio_file.name}"
-    with open(audio_path, "wb") as f:
-        f.write(audio_file.getbuffer())
-    raise NotImplemented("this is old dead code. Need to reimplement this path")
-    if not disable_telegram:
-        post_to_telegram(summary, audio_path)
-    st.markdown(f"**Summary for the uploaded audio file {audio_file.name}:**")
-    st.text_area("Summary", summary, height=250)
+    if audio_file:
+        # Save the uploaded audio file to a temporary location
+        audio_path = f"./data/audio_files/{audio_file.name}"
+        with open(audio_path, "wb") as f:
+            f.write(audio_file.getbuffer())
+
+        session = Session()
+        audio_data = AudioData(
+            title="Placeholder Title",
+            description="Placeholder description.",
+            audio_file_path=audio_path,
+            status='downloaded',
+            index_date=datetime.datetime.now(),
+            updated_at=datetime.datetime.now()
+        )
+        session.add(audio_data)
+
+        status_handlers = {
+            'downloaded': handle_downloaded,
+            'transcribed': handle_transcribed,
+            'summarized': handle_summarized,
+            'error': handle_error
+        }
+
+        # Loop through successive states until an error occurs or we make it to the `summarized` state
+        while audio_data.status != 'error' and audio_data.status != 'summarized':
+            
+            # Get the handler based on the status
+            handler = status_handlers.get(audio_data.status, lambda x: print(f"Unhandled status: {audio_data.status}"))
+            # Call the handler function
+            handler(audio_data)
+            # Refresh the audio_data object to get the updated status
+            session.commit()
+            session.refresh(audio_data)
+
+        session.commit()
+
+        session.refresh(audio_data)
+        assert audio_data.status == 'summarized'
+
+        audio_data.load_summary()
+
+        st.markdown(f"**Summary for the uploaded audio file {audio_file.name}:**")
+        st.text_area("Summary", audio_data.summary, height=250)
 
 
 def handle_previous_transcripts_option():

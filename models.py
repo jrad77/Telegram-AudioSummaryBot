@@ -26,3 +26,24 @@ class YouTubeAudioData(Base):
         with open(self.transcript_summary_path, 'r') as f:
             self.summary = f.read()
 
+
+# Define the AudioData class
+class AudioData(Base):
+    __tablename__ = 'audio_data'
+    id = Column(Integer, primary_key=True)
+    title = Column(String)
+    description = Column(Text)
+    audio_file_path = Column(String)
+    publish_date = Column(Date)
+    index_date = Column(DateTime, default=func.now())
+    transcript_file_path = Column(Text)
+    speakers_count = Column(Integer)
+    transcript_summary_path = Column(Text)
+    summary_model_used = Column(Text)
+    status = Column(String)
+    updated_at = Column(DateTime, onupdate=func.now(), default=func.now())
+
+    # non-database members
+    def load_summary(self):
+        with open(self.transcript_summary_path, 'r') as f:
+            self.summary = f.read()
