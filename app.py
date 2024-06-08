@@ -13,13 +13,22 @@ from models import YouTubeAudioData, AudioData
 import datetime
 
 import streamlit as st
+from pydub import AudioSegment
+import shutil
 
 #GPT_MODEL='gpt-3.5-turbo'
-GPT_MODEL='gpt-4-1106-preview'
+GPT_MODEL='gpt-4o'
+
+OBSIDIAN_MARKDOWN_FILE_DESTINATION = os.path.join(os.path.expanduser("~"), "Documents", "Obsidian Vaults", "Omega", "Transcripts")
 
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+client = OpenAI(
+  api_key=os.getenv('OPENAI_API_KEY'),
+  organization=os.getenv('OPENAI_ORGANIZATION'),
+  project=os.getenv('OPENAI_PROJECT_ID'),
+)
 
 
 def download_audio_from_youtube_to_file(url):
@@ -33,9 +42,34 @@ def download_audio_from_youtube_to_file(url):
 
 
 def transcribe_audio(audio_file):
-    with open(audio_file, 'rb') as file:
-        transcript = client.audio.transcriptions.create(model='whisper-1', 
-        file=file, response_format="text")
+    # Check the file size
+    file_size = os.path.getsize(audio_file)
+    if file_size > 25 * 1024 * 1024:  # 25MB in bytes
+        # Calculate the number of chunks needed
+        num_chunks = file_size // (25 * 1024 * 1024) + 1
+
+        # Split the audio file into chunks
+        audio = AudioSegment.from_file(audio_file)
+        chunk_size = len(audio) // num_chunks
+        chunks = [audio[i * chunk_size:(i + 1) * chunk_size] for i in range(num_chunks)]
+
+        # Transcribe each chunk separately
+        transcripts = []
+        for i, chunk in enumerate(chunks):
+            chunk_file = f"./data/audio_files/chunk_{i}.mp3"
+            chunk.export(chunk_file, format="mp3")
+            with open(chunk_file, 'rb') as file:
+                print(f"Transcribing chunk {i+1}/{num_chunks}")
+                transcript = client.audio.transcriptions.create(model='whisper-1', file=file, response_format="text")
+            transcripts.append(transcript)
+
+        # Combine the transcripts
+        transcript = " ".join(transcripts)
+    else:
+        # Transcribe the entire audio file
+        with open(audio_file, 'rb') as file:
+            print("Transcribing audio file")
+            transcript = client.audio.transcriptions.create(model='whisper-1', file=file, response_format="text")
     print(f"Transcript from the audio:\n\n{transcript}\n")
 
     return transcript
@@ -72,6 +106,10 @@ def handle_downloaded(audio_record):
 
     # Save the transcript to a file
     transcript_file = f"./data/transcripts/{os.path.basename(audio_file_path)}.txt"
+
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(transcript_file), exist_ok=True)
+
     with open(transcript_file, 'w') as f:
         f.write(transcript)
 
@@ -84,11 +122,19 @@ def handle_transcribed(audio_record):
     with open(audio_record.transcript_file_path, 'r') as f: 
         transcript = f.read()
 
+    # Copy transcript file to OBSIDIAN_MARKDOWN_FILE_DESTINATION
+    markdown_file = os.path.join(OBSIDIAN_MARKDOWN_FILE_DESTINATION, os.path.basename(audio_record.audio_file_path) + ".md")
+    shutil.copyfile(audio_record.transcript_file_path, markdown_file)
+
     model=GPT_MODEL
     summary = summarize_transcript(transcript, model)
 
     # Save the summary to a file
     summary_file = f"./data/summaries/{os.path.basename(audio_record.audio_file_path)}.txt"
+
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(summary_file), exist_ok=True)
+
     with open(summary_file, 'w') as f:
         f.write(summary)
 
@@ -96,7 +142,6 @@ def handle_transcribed(audio_record):
     audio_record.summary_model_used = model
     audio_record.status = "summarized"
 
-    pass
 
 def handle_summarized(audio_record):
     # assume you're getting called to be force resummarized
