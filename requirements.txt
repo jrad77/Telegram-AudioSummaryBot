@@ -1,6 +1,6 @@
 openai
-pytube
 streamlit
 python-dotenv
 pydub
 SQLAlchemy
+yt-dlp

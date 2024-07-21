@@ -3,7 +3,7 @@ import os
 import sys
 from openai import OpenAI
 
-from pytube import YouTube
+import yt_dlp
 import argparse
 import requests
 from dotenv import load_dotenv
@@ -16,7 +16,6 @@ import streamlit as st
 from pydub import AudioSegment
 import shutil
 
-#GPT_MODEL='gpt-3.5-turbo'
 GPT_MODEL='gpt-4o'
 
 OBSIDIAN_MARKDOWN_FILE_DESTINATION = os.path.join(os.path.expanduser("~"), "Documents", "Obsidian Vaults", "Omega", "Transcripts")
@@ -32,13 +31,22 @@ client = OpenAI(
 
 
 def download_audio_from_youtube_to_file(url):
-    yt = YouTube(url)
-    out_file = yt.streams.get_audio_only().download("./data/audio_files/")
-    output_mp3 = os.path.splitext(out_file)[0] + '.mp3'
-    os.rename(out_file, output_mp3)
-    print(f'Audio file downloaded to: {output_mp3}')
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': './data/audio_files/%(title)s.%(ext)s',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info_dict = ydl.extract_info(url, download=True)
+        audio_file_path = ydl.prepare_filename(info_dict).replace('.webm', '.mp3')
+    print(f'Audio file downloaded to: {audio_file_path}')
 
-    return output_mp3
+    return audio_file_path
+
 
 
 def transcribe_audio(audio_file):
@@ -158,7 +166,7 @@ def handle_error(audio_record):
     # Error recovery or notification
     raise SystemError("There was an error for some reason. Time to debug")
 
-def handle_youtube_url(url, force_resummarization=False, enable_summarization=False):
+def handle_youtube_url(url, force_resummarization=False):
     # Define a map from status to handler function
     status_handlers = {
         'pending': handle_pending,
@@ -187,10 +195,6 @@ def handle_youtube_url(url, force_resummarization=False, enable_summarization=Fa
     status_before = audio_data.status
     # Loop through successive states until an error occurs or we make it to the `summarized` state
     while audio_data.status != 'error' and audio_data.status != 'summarized':
-        
-        # kind of a hack, but if we're not summarizing, we can skip the summarization step
-        if audio_data.status == 'transcribed' and not enable_summarization:
-            break
 
         # Get the handler based on the status
         handler = status_handlers.get(audio_data.status, lambda x: print(f"Unhandled status: {audio_data.status}"))
@@ -257,18 +261,16 @@ def handle_youtube_option():
     url = st.text_input("Enter a YouTube URL:")
     disable_telegram = st.checkbox("Disable posting to Telegram", value=True)
     force_resummarization = st.checkbox("Force resummarization", value=False)
-    enable_summarization = st.checkbox("Enable summarization", value=False)
 
     if st.button("Process"):
         if url:
-            summary = handle_youtube_url(url, force_resummarization, enable_summarization)
+            summary = handle_youtube_url(url, force_resummarization)
             if not disable_telegram:
                 post_to_telegram(summary)
-            if enable_summarization:
-                st.markdown(f"**Summary for the YouTube video at {url}:**")
-                st.text_area("Summary", summary, height=250)
-            else:
-                st.markdown(f"Done processing {url}.")
+
+            st.markdown(f"<p style='font-size: 24px; color: green;'>Done processing {url}.</p>", unsafe_allow_html=True)
+            st.markdown(f"**Summary for the YouTube video at {url}:**")
+            st.text_area("Summary", summary, height=250)
         else:
             st.warning("Please enter a URL or upload an audio file.")
 
