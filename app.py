@@ -15,6 +15,8 @@ import datetime
 import streamlit as st
 from pydub import AudioSegment
 import shutil
+import cv2
+import base64
 
 GPT_MODEL='gpt-4o'
 
@@ -42,12 +44,44 @@ def download_audio_from_youtube_to_file(url):
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info_dict = ydl.extract_info(url, download=True)
-        audio_file_path = ydl.prepare_filename(info_dict).replace('.webm', '.mp3')
+        # Ensure the file extension is .mp3
+        audio_file_path = ydl.prepare_filename(info_dict)
+        if not audio_file_path.endswith('.mp3'):
+            audio_file_path = audio_file_path.rsplit('.', 1)[0] + '.mp3'
     print(f'Audio file downloaded to: {audio_file_path}')
 
     return audio_file_path
 
 
+def download_video_from_youtube(url):
+    ydl_opts = {
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': './data/video_files/%(title)s.%(ext)s',
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info_dict = ydl.extract_info(url, download=True)
+        video_file_path = ydl.prepare_filename(info_dict)
+    print(f'Video file downloaded to: {video_file_path}')
+
+    return video_file_path
+
+def process_video(video_path, fps=1):
+    base64Frames = []
+    video = cv2.VideoCapture(video_path)
+    total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+    video_fps = video.get(cv2.CAP_PROP_FPS)
+    frames_to_skip = int(video_fps / fps)
+
+    for i in range(0, total_frames, frames_to_skip):
+        video.set(cv2.CAP_PROP_POS_FRAMES, i)
+        success, frame = video.read()
+        if not success:
+            break
+        _, buffer = cv2.imencode(".jpg", frame)
+        base64Frames.append(base64.b64encode(buffer).decode("utf-8"))
+
+    video.release()
+    return base64Frames
 
 def transcribe_audio(audio_file):
     # Check the file size
@@ -82,16 +116,26 @@ def transcribe_audio(audio_file):
 
     return transcript
 
-def summarize_transcript(transcript, model):
-    completion = client.chat.completions.create(model=model,
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant that "
-            "summarizes transcriptions from audio files as though you are the speaker."},
-        {"role": "user", "content": (f"First summarize the most important topics "
-            f"from the following transcript as though you are the speaker, emphasizing the most critical ideas "
-            f"for your telegram channel. Do not reference that you're summarizing a transcript: {transcript}")
-        },
-    ])
+def summarize_transcript(transcript, model, base64Frames=None):
+    messages = [
+        {"role": "system", "content": "You are generating a video summary. Create a summary of the provided video and its transcript. Respond in Markdown. If the transcript is not in english, translate it to English."},
+        {"role": "user", "content": []}
+    ]
+
+    if base64Frames:
+        messages[1]["content"].extend([
+            "These are the frames from the video.",
+            *map(lambda x: {"type": "image_url", 
+                            "image_url": {"url": f"data:image/jpeg;base64,{x}", "detail": "low"}}, 
+                base64Frames)
+        ])
+
+    messages[1]["content"].append({"type": "text", "text": f"The audio transcription is: {transcript}"})
+
+    completion = client.chat.completions.create(
+        model=model,
+        messages=messages
+    )
 
     return completion.choices[0].message.content
 
@@ -166,7 +210,7 @@ def handle_error(audio_record):
     # Error recovery or notification
     raise SystemError("There was an error for some reason. Time to debug")
 
-def handle_youtube_url(url, force_resummarization=False):
+def handle_youtube_url(url, should_process_video=False, video_fps=1, force_resummarization=False):
     # Define a map from status to handler function
     status_handlers = {
         'pending': handle_pending,
@@ -193,24 +237,52 @@ def handle_youtube_url(url, force_resummarization=False):
         print(f"New URL: {url} inserted, ready for processing.")
 
     status_before = audio_data.status
-    # Loop through successive states until an error occurs or we make it to the `summarized` state
-    while audio_data.status != 'error' and audio_data.status != 'summarized':
-
-        # Get the handler based on the status
-        handler = status_handlers.get(audio_data.status, lambda x: print(f"Unhandled status: {audio_data.status}"))
-
-        # Call the handler function
-        handler(audio_data)
-        # Refresh the audio_data object to get the updated status
-        session.commit()
-        session.refresh(audio_data)
-
+    
+    # Download audio
+    audio_file = download_audio_from_youtube_to_file(url)
+    audio_data.audio_file_path = audio_file
+    audio_data.status = 'downloaded'
     session.commit()
 
-    session.refresh(audio_data)
-    if force_resummarization and status_before == audio_data.status == 'summarized': 
+    # Process video if requested
+    base64Frames = None
+    if should_process_video:
+        video_file_path = download_video_from_youtube(url)
+        base64Frames = process_video(video_file_path, fps=video_fps)
+        audio_data.base64Frames = base64Frames  # You might need to add this field to your YouTubeAudioData model
+
+    # Transcribe audio
+    transcript = transcribe_audio(audio_file)
+    transcript_file = f"./data/transcripts/{os.path.basename(audio_file)}.txt"
+    os.makedirs(os.path.dirname(transcript_file), exist_ok=True)
+    with open(transcript_file, 'w') as f:
+        f.write(transcript)
+    audio_data.transcript_file_path = transcript_file
+    audio_data.status = "transcribed"
+    session.commit()
+
+    # Copy transcript file to OBSIDIAN_MARKDOWN_FILE_DESTINATION
+    markdown_file = os.path.join(OBSIDIAN_MARKDOWN_FILE_DESTINATION, os.path.basename(audio_data.audio_file_path) + ".md")
+    shutil.copyfile(audio_data.transcript_file_path, markdown_file)
+
+    # Summarize transcript (and video frames if available)
+    summary = summarize_transcript(transcript, GPT_MODEL, base64Frames)
+
+    # Save the summary to a file
+    summary_file = f"./data/summaries/{os.path.basename(audio_data.audio_file_path)}.txt"
+    os.makedirs(os.path.dirname(summary_file), exist_ok=True)
+    with open(summary_file, 'w') as f:
+        f.write(summary)
+
+    audio_data.transcript_summary_path = summary_file
+    audio_data.summary_model_used = GPT_MODEL
+    audio_data.status = "summarized"
+    session.commit()
+
+    if force_resummarization and status_before == 'summarized':
         handle_transcribed(audio_data)
 
+    session.refresh(audio_data)
     audio_data.load_summary()
     return audio_data.summary
 
@@ -251,20 +323,19 @@ def fetch_all_records():
     records = session.query(YouTubeAudioData).all()
     return records
 
-"""
---------------------------
-Top level functions for handling the different input types
---------------------------
-"""
 
 def handle_youtube_option():
     url = st.text_input("Enter a YouTube URL:")
     disable_telegram = st.checkbox("Disable posting to Telegram", value=True)
     force_resummarization = st.checkbox("Force resummarization", value=False)
+    should_process_video = st.checkbox("Process video content", value=False)
+    video_fps = st.number_input("Video processing FPS", min_value=0.1, max_value=30.0, value=1.0, step=0.1, format="%.1f", disabled=not process_video)
+
 
     if st.button("Process"):
         if url:
-            summary = handle_youtube_url(url, force_resummarization)
+            summary = handle_youtube_url(url, should_process_video, video_fps, force_resummarization)
+
             if not disable_telegram:
                 post_to_telegram(summary)
 
@@ -371,7 +442,6 @@ def main():
     input_type = st.radio("Choose input type", ("YouTube URL", "Upload an audio file", "Chat with previous transcripts"))
 
     # First, figure out what mode we're in and call the handler
-    url = audio_file = transcript_id = None
     if input_type == "YouTube URL":
         handle_youtube_option()
     elif input_type == "Upload an audio file":

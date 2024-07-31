@@ -4,3 +4,5 @@ python-dotenv
 pydub
 SQLAlchemy
 yt-dlp
+opencv-python
+moviepy
